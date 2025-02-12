@@ -1,0 +1,36 @@
+# Configuration file for AWS service controls
+controls:
+  "EC2 stopped instances should be removed in 30 days":
+    function: "cleanup_stopped_instances"
+    description: "Ensures EC2 instances stopped for more than 30 days are terminated"
+    service: "EC2"
+    resource_type: "instance"
+    resource_pattern: "i-[a-zA-Z0-9]+"
+  
+  "EC2 instance IAM role should not allow organization write access":
+    function: "restrict_iam_role_permissions"
+    description: "Ensures EC2 instance IAM roles don't have organization write access"
+    service: "EC2"
+    resource_type: "instance"
+    resource_pattern: "i-[a-zA-Z0-9]+"
+  
+  "EC2 instances should be in a VPC":
+    function: "check_vpc_compliance"
+    description: "Ensures all EC2 instances are launched within a VPC"
+    service: "EC2"
+    resource_type: "instance"
+    resource_pattern: "i-[a-zA-Z0-9]+"
+  
+  "EBS snapshots should not be publicly restorable":
+    function: "ensure_private_snapshots"
+    description: "Ensures EBS snapshots are not publicly accessible"
+    service: "EBS"
+    resource_type: "snapshot"
+    resource_pattern: "snap-[a-zA-Z0-9]+"
+  
+  "Attached EBS volumes should have encryption enabled":
+    function: "ensure_encrypted_volumes"
+    description: "Ensures attached EBS volumes are encrypted"
+    service: "EBS"
+    resource_type: "volume"
+    resource_pattern: "vol-[a-zA-Z0-9]+"

@@ -1,0 +1,160 @@
+#!/bin/bash
+
+# Configuration file for control mappings
+cat > control_mappings.yaml << 'EOF'
+controls:
+  "Check IAM Role Permissions":
+    function: "restrict_iam_role_permissions"
+    description: "Ensures IAM roles do not have excessive permissions"
+  "Check VPC Compliance":
+    function: "check_vpc_compliance"
+    description: "Ensures EC2 instances are in a VPC"
+EOF
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+BLUE='\033[0;34m'
+
+# Arrays to store resources
+declare -a need_fix=()
+declare -a compliant=()
+declare -a not_found=()
+
+# Function to log messages
+log() {
+    local level=$1
+    local message=$2
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    case $level in
+        "INFO") echo -e "${BLUE}[$timestamp] INFO: $message${NC}" ;;
+        "SUCCESS") echo -e "${GREEN}[$timestamp] SUCCESS: $message${NC}" ;;
+        "WARNING") echo -e "${YELLOW}[$timestamp] WARNING: $message${NC}" ;;
+        "ERROR") echo -e "${RED}[$timestamp] ERROR: $message${NC}" ;;
+        *) echo "[$timestamp] $message" ;;
+    esac
+}
+
+# Function to check AWS CLI configuration
+check_aws_configuration() {
+    log "INFO" "Checking AWS CLI configuration..."
+    if ! command -v aws &> /dev/null; then
+        log "ERROR" "AWS CLI is not installed. Please install it first."
+        exit 1
+    fi
+    if ! aws sts get-caller-identity &> /dev/null; then
+        log "ERROR" "AWS CLI is not properly configured. Please run 'aws configure' first."
+        exit 1
+    fi
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    REGION=$(aws configure get region)
+    log "SUCCESS" "AWS CLI configured (Account: $ACCOUNT_ID, Region: $REGION)"
+}
+
+# IAM Role Permissions Compliance Check
+restrict_iam_role_permissions() {
+    log "INFO" "Starting EC2 IAM role permissions validation..."
+    read -p "Enter the EC2 Instance ID to check IAM role (or press Enter to auto-scan all instances): " user_instance_id
+
+    if [[ -n "$user_instance_id" ]]; then
+        instances=("$user_instance_id")
+    else
+        log "INFO" "No manual input provided. Scanning all EC2 instances..."
+        instances=($(aws ec2 describe-instances --query "Reservations[].Instances[].InstanceId" --output text))
+    fi
+
+    if [[ ${#instances[@]} -eq 0 ]]; then
+        log "INFO" "No EC2 instances found."
+        exit 0
+    fi
+
+    for instance_id in "${instances[@]}"; do
+        log "INFO" "Checking IAM role for instance: $instance_id"
+        iam_role_name=$(aws ec2 describe-instances --instance-ids "$instance_id" \
+            --query "Reservations[].Instances[].IamInstanceProfile.Arn" --output text 2>/dev/null | awk -F'/' '{print $NF}')
+
+        if [[ -z "$iam_role_name" || "$iam_role_name" == "None" ]]; then
+            log "INFO" "No IAM role attached to instance $instance_id. Skipping..."
+            continue
+        fi
+
+        policy_arns=$(aws iam list-attached-role-policies --role-name "$iam_role_name" --query "AttachedPolicies[].PolicyArn" --output text)
+
+        for policy_arn in $policy_arns; do
+            policy_doc=$(aws iam get-policy-version --policy-arn "$policy_arn" \
+                --version-id $(aws iam get-policy --policy-arn "$policy_arn" --query "Policy.DefaultVersionId" --output text) \
+                --query "PolicyVersion.Document" --output json)
+
+            if echo "$policy_doc" | jq -e '.Statement[] | select(.Effect=="Allow") | .Action | contains("organizations:Write")' >/dev/null; then
+                log "WARNING" "IAM role $iam_role_name allows 'organizations:Write'. Fixing..."
+
+                new_policy_doc=$(echo "$policy_doc" | jq 'walk(if type == "array" then map(select(.Action != "organizations:Write")) else . end)')
+                aws iam detach-role-policy --role-name "$iam_role_name" --policy-arn "$policy_arn"
+                new_policy_arn=$(aws iam create-policy --policy-name "${iam_role_name}_Restricted" --policy-document "$new_policy_doc" --query "Policy.Arn" --output text)
+                aws iam attach-role-policy --role-name "$iam_role_name" --policy-arn "$new_policy_arn"
+
+                log "SUCCESS" "Fixed IAM role $iam_role_name by removing 'organizations:Write' permission."
+            else
+                log "SUCCESS" "IAM role $iam_role_name is already compliant."
+            fi
+        done
+    done
+}
+
+# VPC Compliance Check
+check_vpc_compliance() {
+    log "INFO" "Starting EC2 VPC compliance check..."
+    read -p "Enter the EC2 Instance ID to check VPC status (or press Enter to scan all instances): " user_instance_id
+
+    if [[ -n "$user_instance_id" ]]; then
+        instances=("$user_instance_id")
+    else
+        log "INFO" "No manual input provided. Scanning all EC2 instances..."
+        instances=($(aws ec2 describe-instances --query "Reservations[].Instances[].InstanceId" --output text))
+    fi
+
+    for instance_id in "${instances[@]}"; do
+        log "INFO" "Checking VPC status for instance: $instance_id"
+        vpc_id=$(aws ec2 describe-instances --instance-ids "$instance_id" --query "Reservations[].Instances[].VpcId" --output text 2>/dev/null)
+
+        if [[ -z "$vpc_id" || "$vpc_id" == "None" ]]; then
+            log "WARNING" "Instance $instance_id is NOT in a VPC (EC2-Classic)."
+            read -p "Do you want to stop instance $instance_id for migration? (yes/no): " choice
+            if [[ "$choice" == "yes" ]]; then
+                aws ec2 stop-instances --instance-ids "$instance_id"
+                log "SUCCESS" "Stopped instance $instance_id for migration."
+            fi
+        else
+            log "SUCCESS" "Instance $instance_id is in VPC: $vpc_id"
+        fi
+    done
+}
+
+# Process CSV function
+process_csv() {
+    local csv_file=$1
+    shift
+    local selected_controls=("$@")
+
+    while IFS=, read -r _ _ _ _ control _ _ _ resource _; do
+        [[ " ${selected_controls[@]} " =~ " ${control} " ]] || continue
+        function_name=$(yq eval ".controls.[\"$control\"].function" control_mappings.yaml)
+        [[ -z "$function_name" ]] && continue
+        log "INFO" "Executing function: $function_name for resource: $resource"
+        $function_name
+    done < <(tail -n +2 "$csv_file")
+}
+
+# Main function
+main() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: $0 <csv_file> <control1> [control2 ...]"
+        exit 1
+    fi
+    check_aws_configuration
+    process_csv "$@"
+}
+
+main "$@"

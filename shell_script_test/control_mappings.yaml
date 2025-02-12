@@ -1,0 +1,25 @@
+controls:
+  "EBS snapshots should not be publicly restorable":
+    function: "ensure_private_snapshots"
+    description: "Ensures EBS snapshots are not publicly accessible"
+  "Attached EBS volumes should have encryption enabled":
+    function: "ensure_encrypted_volumes"
+    description: "Ensures attached EBS volumes are encrypted"
+  "EBS volumes should be protected by a backup plan":
+    function: "ensure_backup_plan"
+    description: "Ensures EBS volumes are protected by backup plans"
+  "EBS encryption by default should be enabled":
+    function: "ensure_ebs_encryption_default"
+    description: "Ensures EBS encryption by default is enabled"
+  "EBS volumes should be attached to EC2 instances":
+    function: "ensure_ebs_attached"
+    description: "Ensures EBS volumes are attached to EC2 instances"
+  "EBS snapshots should be encrypted":
+    function: "ensure_snapshot_encryption"
+    description: "Ensures EBS snapshots are encrypted"
+  "EBS volume snapshots should exist":
+    function: "ensure_snapshots_exist"
+    description: "Ensures EBS volumes have snapshots"
+  "Attached EBS volumes should have delete on termination enabled":
+    function: "ensure_delete_on_termination"
+    description: "Ensures attached EBS volumes have delete on termination enabled"

@@ -1,0 +1,13 @@
+controls:
+  DeleteOnTerminationCheck:
+    function: ensure_delete_on_termination
+    service: EBS
+    resource_type: instance
+    resource_pattern: "i-[a-zA-Z0-9]+"
+
+#Explanation:
+#DeleteOnTerminationCheck: This is the control name used in the CSV file.
+#function: The name of the function in your script that should be executed (ensure_delete_on_termination).
+#service: The AWS service this control applies to (EBS).
+#resource_type: The type of AWS resource being validated (instance because EBS is attached to EC2 instances).
+#resource_pattern: The regex pattern used to extract EC2 instance IDs from the CSV file.
